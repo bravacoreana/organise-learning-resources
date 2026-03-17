@@ -1,7 +1,3 @@
-const nextConfig = {
-  turbopack: {
-    root: "/Users/liha/Desktop/Vibe Codes/ai-resource-roadmap",
-  },
-};
+const nextConfig = {};
 
 export default nextConfig;
