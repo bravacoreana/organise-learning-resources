@@ -1,3 +1,5 @@
+import type { DifficultyLevel, ResourceCategory, ResourceRecord, RoadmapStage } from "@/lib/types";
+
 const REFERENCE_ITEMS = [
   {
     order: 1,
@@ -241,7 +243,7 @@ const REFERENCE_ITEMS = [
   },
 ];
 
-function mapCategory(sourceCategory) {
+function mapCategory(sourceCategory: string): ResourceCategory {
   if (sourceCategory.includes("구조화")) return "Prompting";
   if (sourceCategory.includes("워크플로우")) return "LLM Apps";
   if (sourceCategory.includes("Claude Code") || sourceCategory.includes("운영 스택") || sourceCategory.includes("하네스") || sourceCategory.includes("아키텍처")) return "Agents";
@@ -249,13 +251,13 @@ function mapCategory(sourceCategory) {
   return "Foundations";
 }
 
-function mapDifficulty(difficultyText) {
+function mapDifficulty(difficultyText: string): DifficultyLevel {
   if (difficultyText.includes("고급")) return "Advanced";
   if (difficultyText.includes("중급")) return "Intermediate";
   return "Beginner";
 }
 
-function mapRoadmap(category) {
+function mapRoadmap(category: ResourceCategory): RoadmapStage {
   const roadmapMap = {
     Foundations: "Foundation",
     Prompting: "Prompting",
@@ -267,11 +269,11 @@ function mapRoadmap(category) {
   return roadmapMap[category] || "Foundation";
 }
 
-function buildTags(item) {
+function buildTags(item: (typeof REFERENCE_ITEMS)[number]): string[] {
   return [item.format, item.trustLevel, ...item.topic.split(",").map((tag) => tag.trim()).slice(0, 4)];
 }
 
-export const REFERENCE_RESOURCES = REFERENCE_ITEMS.map((item) => {
+export const REFERENCE_RESOURCES: ResourceRecord[] = REFERENCE_ITEMS.map((item) => {
   const category = mapCategory(item.sourceCategory);
   const difficulty = mapDifficulty(item.difficultyText);
   const roadmap = mapRoadmap(category);

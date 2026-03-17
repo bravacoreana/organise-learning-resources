@@ -1,3 +1,12 @@
+import type {
+  DifficultyLevel,
+  FileAnalysisInput,
+  FileAnalysisResult,
+  ProgressStatus,
+  ResourceCategory,
+  RoadmapStage,
+} from "@/lib/types";
+
 const CATEGORY_KEYWORDS = [
   { category: "Agents", keywords: ["agent", "agents", "langgraph", "autogen", "crew", "workflow", "tool use", "state graph"] },
   { category: "RAG", keywords: ["rag", "retrieval", "vector", "embedding", "chunk", "retriever", "search", "grounding"] },
@@ -8,15 +17,15 @@ const CATEGORY_KEYWORDS = [
   { category: "Research", keywords: ["paper", "research", "arxiv", "transformer", "attention", "fine-tuning"] },
   { category: "Case Study", keywords: ["case study", "postmortem", "real world", "use case", "lessons learned"] },
   { category: "Foundations", keywords: ["introduction", "intro", "basics", "fundamentals", "overview", "foundation", "101"] },
-];
+ ] satisfies Array<{ category: ResourceCategory; keywords: string[] }>;
 
-const DIFFICULTY_KEYWORDS = {
+const DIFFICULTY_KEYWORDS: Record<DifficultyLevel, string[]> = {
   Beginner: ["intro", "basics", "beginner", "quickstart", "getting started", "overview", "guide", "101"],
   Intermediate: ["tutorial", "build", "pipeline", "workflow", "integration", "implementation", "rag", "agent"],
   Advanced: ["paper", "benchmark", "distributed", "optimization", "latency", "advanced", "eval harness", "transformer"],
 };
 
-const ROADMAP_BY_CATEGORY = {
+const ROADMAP_BY_CATEGORY: Record<ResourceCategory, RoadmapStage> = {
   Foundations: "Foundation",
   Prompting: "Prompting",
   "LLM Apps": "Application",
@@ -28,7 +37,7 @@ const ROADMAP_BY_CATEGORY = {
   "Case Study": "Production",
 };
 
-export const CATEGORY_OPTIONS = [
+export const CATEGORY_OPTIONS: ResourceCategory[] = [
   "Foundations",
   "Prompting",
   "LLM Apps",
@@ -40,11 +49,20 @@ export const CATEGORY_OPTIONS = [
   "Case Study",
 ];
 
-export const DIFFICULTY_OPTIONS = ["Beginner", "Intermediate", "Advanced"];
-export const ROADMAP_OPTIONS = ["Foundation", "Prompting", "Application", "Agent Systems", "Evaluation", "Production"];
-export const PROGRESS_OPTIONS = ["미시작", "진행 중", "복습 필요", "완료"];
+export const DIFFICULTY_OPTIONS: DifficultyLevel[] = ["Beginner", "Intermediate", "Advanced"];
+export const ROADMAP_OPTIONS: RoadmapStage[] = ["Foundation", "Prompting", "Application", "Agent Systems", "Evaluation", "Production"];
+export const PROGRESS_OPTIONS: ProgressStatus[] = ["미시작", "진행 중", "복습 필요", "완료"];
 
-export async function analyzeResourceInput({ title, url, description, file, category, difficulty, roadmap, tags }) {
+export async function analyzeResourceInput({
+  title,
+  url,
+  description,
+  file,
+  category,
+  difficulty,
+  roadmap,
+  tags,
+}: FileAnalysisInput): Promise<FileAnalysisResult> {
   const fileContext = file ? await readFileContext(file) : { title: "", description: "", context: "", tags: [] };
   const mergedTitle = title || fileContext.title || getTitleFromUrl(url) || "새 리소스";
   const mergedDescription = description || fileContext.description || "";
@@ -73,7 +91,7 @@ export async function analyzeResourceInput({ title, url, description, file, cate
   };
 }
 
-async function readFileContext(file) {
+async function readFileContext(file: File) {
   const extension = getExtension(file.name);
   const textLike = file.type.startsWith("text/") || ["md", "txt", "json", "html", "htm", "csv", "js", "ts", "py"].includes(extension);
 
@@ -101,7 +119,7 @@ async function readFileContext(file) {
   };
 }
 
-function inferCategory(text) {
+function inferCategory(text: string): ResourceCategory {
   for (const item of CATEGORY_KEYWORDS) {
     if (item.keywords.some((keyword) => text.includes(keyword))) {
       return item.category;
@@ -110,8 +128,8 @@ function inferCategory(text) {
   return "Foundations";
 }
 
-function inferDifficulty(text, category) {
-  for (const [level, keywords] of Object.entries(DIFFICULTY_KEYWORDS)) {
+function inferDifficulty(text: string, category: ResourceCategory): DifficultyLevel {
+  for (const [level, keywords] of Object.entries(DIFFICULTY_KEYWORDS) as Array<[DifficultyLevel, string[]]>) {
     if (keywords.some((keyword) => text.includes(keyword))) {
       return level;
     }
@@ -124,7 +142,7 @@ function inferDifficulty(text, category) {
   return "Beginner";
 }
 
-function inferRoadmap(text, category, difficulty) {
+function inferRoadmap(text: string, category: ResourceCategory, difficulty: DifficultyLevel): RoadmapStage {
   if (text.includes("deploy") || text.includes("production") || text.includes("monitoring")) {
     return "Production";
   }
@@ -137,7 +155,7 @@ function inferRoadmap(text, category, difficulty) {
   return ROADMAP_BY_CATEGORY[category] || "Foundation";
 }
 
-function inferTags(text, category, difficulty) {
+function inferTags(text: string, category: ResourceCategory, difficulty: DifficultyLevel): string[] {
   const commonTags = ["agents", "rag", "prompt", "eval", "deployment", "research", "workflow", "guide", "api"];
   const matches = commonTags.filter((tag) => text.includes(tag));
   matches.push(category.toLowerCase().replace(/\s+/g, "-"));
@@ -145,7 +163,14 @@ function inferTags(text, category, difficulty) {
   return [...new Set(matches)];
 }
 
-function buildSummary(title, description, category, difficulty, url, file) {
+function buildSummary(
+  title: string,
+  description: string,
+  category: ResourceCategory,
+  difficulty: DifficultyLevel,
+  url: string,
+  file?: File | null,
+): string {
   const sourceLabel = file ? `파일 ${file.name}` : url ? "링크 리소스" : "수동 입력 리소스";
   const lead = description
     ? description.slice(0, 160)
@@ -154,7 +179,7 @@ function buildSummary(title, description, category, difficulty, url, file) {
   return `${sourceLabel}입니다. ${lead}`;
 }
 
-function buildLearningGoals(category, difficulty, description) {
+function buildLearningGoals(category: ResourceCategory, difficulty: DifficultyLevel, description: string): string[] {
   const goals = [];
 
   if (category === "Prompting") {
@@ -188,7 +213,7 @@ function buildLearningGoals(category, difficulty, description) {
   return goals.slice(0, 4);
 }
 
-function buildPrepInfo(category, difficulty) {
+function buildPrepInfo(category: ResourceCategory, difficulty: DifficultyLevel): string {
   const prepMap = {
     Foundations: "LLM 기본 개념과 API 호출 경험이 없어도 시작 가능",
     Prompting: "간단한 프롬프트 실험 경험이 있으면 더 좋음",
@@ -211,7 +236,15 @@ function buildPrepInfo(category, difficulty) {
   return `${prepMap[category]} / ${levelNote}`;
 }
 
-function buildAnalysisNote(text, category, difficulty, roadmap, manualCategory, manualDifficulty, manualRoadmap) {
+function buildAnalysisNote(
+  text: string,
+  category: ResourceCategory,
+  difficulty: DifficultyLevel,
+  roadmap: RoadmapStage,
+  manualCategory: FileAnalysisInput["category"],
+  manualDifficulty: FileAnalysisInput["difficulty"],
+  manualRoadmap: FileAnalysisInput["roadmap"],
+): string {
   const notes = [];
   notes.push(`카테고리: ${manualCategory === "자동 추정" ? `${category} 자동 추정` : `${category} 수동 지정`}`);
   notes.push(`난이도: ${manualDifficulty === "자동 추정" ? `${difficulty} 자동 추정` : `${difficulty} 수동 지정`}`);
@@ -222,7 +255,7 @@ function buildAnalysisNote(text, category, difficulty, roadmap, manualCategory, 
   return notes.join(" / ");
 }
 
-function getTitleFromUrl(url) {
+function getTitleFromUrl(url: string): string {
   try {
     const parsed = new URL(url);
     const slug = parsed.pathname.split("/").filter(Boolean).pop();
@@ -232,10 +265,10 @@ function getTitleFromUrl(url) {
   }
 }
 
-function getExtension(fileName) {
+function getExtension(fileName: string): string {
   return fileName.includes(".") ? fileName.split(".").pop().toLowerCase() : "";
 }
 
-function stripExtension(fileName) {
+function stripExtension(fileName: string): string {
   return fileName.replace(/\.[^.]+$/, "");
 }
