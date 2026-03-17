@@ -9,3 +9,10 @@ yarn-error.log*
 pnpm-debug.log*
 dist/
 coverage/
+
+# Local data exports and backups
+ai-roadmap-*.json
+exports/
+backups/
+*.bak
+*.backup
