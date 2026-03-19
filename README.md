@@ -4,7 +4,7 @@ AI 학습 리소스를 한곳에 모아서 정리하고, 로드맵/카테고리/
 
 ## What It Does
 
-- 링크 또는 파일을 추가하고 자동 분류합니다.
+- 링크 또는 직접 입력 리소스를 추가하고 자동 분류합니다.
 - 리소스를 `테이블`, `로드맵`, `카테고리`, `난이도`, `노트 모아보기` 뷰로 확인할 수 있습니다.
 - 학습 진도, 태그, 검색, 필터 기준으로 다시 정리할 수 있습니다.
 - 각 리소스에 대해 요약, 기대 학습, 선행 지식, 노트를 관리할 수 있습니다.
@@ -14,7 +14,7 @@ AI 학습 리소스를 한곳에 모아서 정리하고, 로드맵/카테고리/
 
 - Next.js 16
 - React 19
-- LocalStorage + IndexedDB
+- LocalStorage
 
 ## Run Locally
 
@@ -41,11 +41,13 @@ app/
   layout.js
   page.js
 components/
-  resource-workspace.jsx
+  resource-workspace.tsx
+  resource-inspector.tsx
 lib/
-  browser-storage.js
-  reference-resources.js
-  resource-analysis.js
+  app-storage.ts
+  reference-resources.ts
+  resource-analysis.ts
+  resource-record.ts
 ```
 
 ## Data Model
@@ -53,7 +55,7 @@ lib/
 리소스는 대략 아래 정보를 가집니다.
 
 - 제목
-- 링크 또는 파일 메타데이터
+- 링크 또는 직접 입력 메타데이터
 - 카테고리
 - 난이도
 - 로드맵 단계
@@ -65,7 +67,7 @@ lib/
 ## Storage
 
 - UI 상태와 리소스 메타데이터는 `localStorage` 에 저장됩니다.
-- 업로드한 파일은 `IndexedDB` 에 저장됩니다.
+- JSON 내보내기에는 현재 리소스와 보기/필터/정렬 상태가 함께 포함됩니다.
 - 서버나 외부 DB는 사용하지 않습니다.
 
 ## Security Notes
@@ -73,7 +75,6 @@ lib/
 공개 레포 기준으로 최소한의 클라이언트 측 방어를 넣어두었습니다.
 
 - 외부 링크는 `http` / `https` 만 허용합니다.
-- 위험한 업로드 파일 형식은 새 탭 실행 대신 다운로드로 처리합니다.
 - JSON import 시 구조 검증, 길이 제한, 허용값 검증을 수행합니다.
 
 그래도 이 앱은 로컬 브라우저 저장소 기반 도구이므로, 민감한 비밀값이나 인증 토큰 저장용으로 쓰는 것은 권장하지 않습니다.

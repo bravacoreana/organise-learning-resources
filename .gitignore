@@ -16,3 +16,4 @@ exports/
 backups/
 *.bak
 *.backup
+.vercel

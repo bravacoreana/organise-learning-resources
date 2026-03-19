@@ -1,3 +1,4 @@
+import { normalizeResource } from "@/lib/resource-record";
 import type { DifficultyLevel, ResourceCategory, ResourceRecord, RoadmapStage } from "@/lib/types";
 
 const REFERENCE_ITEMS = [
@@ -278,7 +279,7 @@ export const REFERENCE_RESOURCES: ResourceRecord[] = REFERENCE_ITEMS.map((item) 
   const difficulty = mapDifficulty(item.difficultyText);
   const roadmap = mapRoadmap(category);
 
-  return {
+  return normalizeResource({
     id: `ref-${item.order}`,
     title: item.title,
     url: item.url,
@@ -294,8 +295,6 @@ export const REFERENCE_RESOURCES: ResourceRecord[] = REFERENCE_ITEMS.map((item) 
     analysisNote: `추천 이유: ${item.reason} / 분석 메모: ${item.analysisMemo}`,
     notes: "",
     sourceType: "link",
-    fileName: "",
-    fileType: "",
     topic: item.topic,
     trustLevel: item.trustLevel,
     recommendationReason: item.reason,
@@ -305,5 +304,5 @@ export const REFERENCE_RESOURCES: ResourceRecord[] = REFERENCE_ITEMS.map((item) 
     order: item.order,
     createdAt: "2026-03-17T16:00:00.000Z",
     updatedAt: "2026-03-17T16:00:00.000Z",
-  };
+  });
 });
