@@ -1931,6 +1931,7 @@ tbody tr:hover {
 .detail-drawer {
   width: min(820px, 100vw);
   height: 100vh;
+  height: 100dvh;
   display: flex;
   flex-direction: column;
   border-left: 1px solid var(--border);
@@ -1954,6 +1955,7 @@ tbody tr:hover {
 .drawer-actions {
   border-top: 1px solid var(--border);
   background: #ffffff;
+  padding-bottom: calc(18px + env(safe-area-inset-bottom, 0px));
 }
 
 .resource-detail-hero {
@@ -1987,6 +1989,24 @@ tbody tr:hover {
   gap: 8px;
 }
 
+.save-indicator {
+  display: inline-flex;
+  align-items: center;
+  min-height: 36px;
+  padding: 0 10px;
+  border-radius: 999px;
+  background: rgba(47, 111, 235, 0.08);
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.save-indicator.saving {
+  background: rgba(201, 140, 0, 0.12);
+  color: #8b6200;
+}
+
 .drawer-scroll {
   flex: 1;
   overflow: auto;
@@ -2011,7 +2031,7 @@ tbody tr:hover {
 
 .inline-actions {
   margin-top: auto;
-  padding-bottom: 0;
+  padding-bottom: calc(8px + env(safe-area-inset-bottom, 0px));
   border-top: none;
   background: transparent;
 }
@@ -2397,6 +2417,10 @@ tbody tr:hover {
     padding: 16px;
   }
 
+  .drawer-actions {
+    padding-bottom: calc(20px + env(safe-area-inset-bottom, 0px));
+  }
+
   .triple-grid,
   .double-grid,
   .detail-grid,
@@ -2446,4 +2470,67 @@ tbody tr:hover {
   .filter-panel .chip-filter p {
     padding-top: 0;
   }
+}
+
+/* Settings panel */
+.settings-panel {
+  margin-top: 12px;
+  padding: 20px 24px;
+}
+
+.settings-description {
+  font-size: 13px;
+  color: var(--text-secondary, #888);
+  margin: 8px 0 16px;
+  line-height: 1.5;
+}
+
+.settings-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.settings-input {
+  flex: 1;
+  padding: 8px 12px;
+  border: 1px solid var(--border, #333);
+  border-radius: 6px;
+  background: var(--surface, #1a1a1a);
+  color: var(--text-primary, #eee);
+  font-size: 14px;
+  font-family: monospace;
+}
+
+.settings-status {
+  font-size: 12px;
+  color: var(--text-secondary, #888);
+  margin-top: 8px;
+}
+
+/* Upload box */
+.upload-box {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.upload-box input[type="file"] {
+  font-size: 13px;
+}
+
+.upload-file-name {
+  font-size: 12px;
+  color: var(--text-secondary, #888);
+  word-break: break-all;
+}
+
+/* AI badge */
+.ai-badge {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  background: #2d5a27;
+  color: #7ee672;
+  white-space: nowrap;
 }

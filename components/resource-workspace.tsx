@@ -1,8 +1,7 @@
 "use client";
 
-import { useDeferredValue, useEffect, useRef, useState, startTransition } from "react";
+import { useDeferredValue, useEffect, useEffectEvent, useRef, useState, startTransition } from "react";
 import type { ChangeEvent, MouseEvent, PointerEvent } from "react";
-import type { Dispatch, SetStateAction } from "react";
 import {
   analyzeResourceInput,
   CATEGORY_OPTIONS,
@@ -10,32 +9,22 @@ import {
   PROGRESS_OPTIONS,
   ROADMAP_OPTIONS,
 } from "@/lib/resource-analysis";
+import ResourceInspector from "@/components/resource-inspector";
+import { buildExportPayload, loadStoredState, normalizeImportedState, saveStoredState } from "@/lib/app-storage";
+import { getStoredApiKey, setStoredApiKey, hasStoredApiKey } from "@/lib/api-key-storage";
 import { REFERENCE_RESOURCES } from "@/lib/reference-resources";
 import {
-  deleteStoredFile,
-  getStoredFile,
-  loadStoredState,
-  putStoredFile,
-  saveStoredState,
-} from "@/lib/browser-storage";
-import type {
-  ColumnKey,
-  ColumnVisibility,
-  ColumnWidths,
-  DifficultyLevel,
-  FilterState,
-  FormState,
-  HeaderMenuState,
-  ResourceCategory,
-  ResourceDraft,
-  ResourceRecord,
-  ResizeState,
-  RoadmapStage,
-  SortConfig,
-  StyleMode,
-  SourceType,
-  ViewMode,
-} from "@/lib/types";
+  compareResources,
+  getDominantValue,
+  getResourceKindLabel,
+  normalizeResource,
+  parseTags,
+  resourceSignature,
+  sanitizeExternalUrl,
+  toPersistedResource,
+  toResourceDraft,
+} from "@/lib/resource-record";
+import type { ColumnKey, ColumnVisibility, ColumnWidths, FilterState, FormState, HeaderMenuState, ResourceDraft, ResourceRecord, ResizeState, SortConfig, StyleMode, ViewMode } from "@/lib/types";
 
 interface TableColumn {
   key: ColumnKey;
@@ -52,16 +41,6 @@ interface ViewOption {
 interface StyleOption {
   value: StyleMode;
   label: string;
-}
-
-interface ResourceInspectorProps {
-  draft: ResourceDraft;
-  setDraft: Dispatch<SetStateAction<ResourceDraft | null>>;
-  onDelete: () => Promise<void> | void;
-  onSave: (nextDraft?: ResourceDraft | null) => void;
-  onOpenFile: () => Promise<void> | void;
-  onClose?: () => void;
-  inline?: boolean;
 }
 
 const EMPTY_FILTERS: FilterState = {
@@ -126,6 +105,9 @@ const TABLE_COLUMNS: TableColumn[] = [
   { key: "status", label: "상태", sortKey: "status", minWidth: 150 },
   { key: "link", label: "링크", sortKey: "link", minWidth: 110 },
 ];
+
+const SAVE_DEBOUNCE_MS = 400;
+const DEFAULT_RESOURCES = REFERENCE_RESOURCES.map(normalizeResource);
 
 const ROADMAP_STAGE_META = {
   Foundation: {
@@ -217,59 +199,11 @@ const DIFFICULTY_META = {
   },
 };
 
-const SAFE_LINK_PROTOCOLS = new Set(["http:", "https:"]);
-const SAFE_SOURCE_TYPES = new Set<SourceType>(["manual", "link", "file"]);
-const SAFE_CATEGORY_VALUES = new Set<ResourceCategory>(CATEGORY_OPTIONS);
-const SAFE_DIFFICULTY_VALUES = new Set<DifficultyLevel>(DIFFICULTY_OPTIONS);
-const SAFE_ROADMAP_VALUES = new Set<RoadmapStage>(ROADMAP_OPTIONS);
-const SAFE_PROGRESS_VALUES = new Set<ResourceRecord["progress"]>(PROGRESS_OPTIONS);
-const SAFE_PREVIEW_FILE_TYPES = new Set([
-  "application/pdf",
-  "application/json",
-  "text/plain",
-  "text/markdown",
-  "text/csv",
-  "image/png",
-  "image/jpeg",
-  "image/gif",
-  "image/webp",
-  "image/avif",
-]);
-const SAFE_PREVIEW_FILE_EXTENSIONS = new Set([
-  "pdf",
-  "json",
-  "txt",
-  "md",
-  "csv",
-  "png",
-  "jpg",
-  "jpeg",
-  "gif",
-  "webp",
-  "avif",
-]);
 const MAX_IMPORT_FILE_BYTES = 5 * 1024 * 1024;
-const MAX_IMPORTED_RESOURCES = 2000;
-const FIELD_LIMITS = {
-  id: 120,
-  title: 200,
-  url: 2048,
-  shortText: 120,
-  mediumText: 500,
-  longText: 4000,
-  notes: 20000,
-  fileName: 255,
-  fileType: 120,
-  order: 80,
-  tag: 40,
-  tagCount: 12,
-  learningGoal: 240,
-  learningGoalCount: 10,
-};
 
 export default function ResourceWorkspace() {
   const [hydrated, setHydrated] = useState(false);
-  const [resources, setResources] = useState<ResourceRecord[]>(REFERENCE_RESOURCES);
+  const [resources, setResources] = useState<ResourceRecord[]>(DEFAULT_RESOURCES);
   const [filters, setFilters] = useState<FilterState>(EMPTY_FILTERS);
   const [view, setView] = useState<ViewMode>("table");
   const [styleMode, setStyleMode] = useState<StyleMode>("database");
@@ -281,34 +215,57 @@ export default function ResourceWorkspace() {
   const [headerMenu, setHeaderMenu] = useState<HeaderMenuState | null>(null);
   const [isColumnPickerOpen, setIsColumnPickerOpen] = useState(false);
   const [form, setForm] = useState<FormState>(EMPTY_FORM);
-  const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [drawerDraft, setDrawerDraft] = useState<ResourceDraft | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [apiKeyInput, setApiKeyInput] = useState("");
+  const [apiKeySet, setApiKeySet] = useState(false);
+  const [draftSaveState, setDraftSaveState] = useState<"idle" | "saving" | "saved">("idle");
   const resizeStateRef = useRef<ResizeState | null>(null);
+  const saveTimerRef = useRef<number | null>(null);
 
   const deferredSearch = useDeferredValue(filters.search);
 
   useEffect(() => {
-    const stored = loadStoredState();
+    const stored = normalizeImportedState(loadStoredState(), {
+      fallbackResources: DEFAULT_RESOURCES,
+      emptyFilters: EMPTY_FILTERS,
+      defaultSort: DEFAULT_SORT,
+      defaultColumnWidths: DEFAULT_COLUMN_WIDTHS,
+      defaultColumnVisibility: DEFAULT_COLUMN_VISIBILITY,
+    });
     if (stored) {
-      const storedResources = Array.isArray(stored.resources) ? stored.resources.map(normalizeResource) : [];
-      setResources(storedResources.length ? storedResources : REFERENCE_RESOURCES);
-      setView(stored.view || "table");
-      setStyleMode(stored.styleMode || "database");
-      setFilters({ ...EMPTY_FILTERS, ...(stored.filters || {}) });
-      setSortConfig(stored.sortConfig || DEFAULT_SORT);
-      setColumnWidths({ ...DEFAULT_COLUMN_WIDTHS, ...(stored.columnWidths || {}) });
-      setColumnVisibility({ ...DEFAULT_COLUMN_VISIBILITY, ...(stored.columnVisibility || {}) });
+      setResources(stored.resources);
+      setView(stored.view);
+      setStyleMode(stored.styleMode);
+      setFilters(stored.filters);
+      setSortConfig(stored.sortConfig);
+      setColumnWidths(stored.columnWidths);
+      setColumnVisibility(stored.columnVisibility);
     } else {
-      setResources(REFERENCE_RESOURCES);
+      setResources(DEFAULT_RESOURCES);
     }
+    setApiKeySet(hasStoredApiKey());
     setHydrated(true);
   }, []);
 
   useEffect(() => {
     if (!hydrated) return;
-    saveStoredState({ resources, view, filters, styleMode, sortConfig, columnWidths, columnVisibility });
+    const timeoutId = window.setTimeout(() => {
+      saveStoredState({
+        resources,
+        view,
+        filters,
+        styleMode,
+        sortConfig,
+        columnWidths,
+        columnVisibility,
+      });
+    }, SAVE_DEBOUNCE_MS);
+
+    return () => window.clearTimeout(timeoutId);
   }, [resources, view, filters, styleMode, sortConfig, columnWidths, columnVisibility, hydrated]);
 
   useEffect(() => {
@@ -347,10 +304,11 @@ export default function ResourceWorkspace() {
   useEffect(() => {
     if (!selectedId) {
       setDrawerDraft(null);
+      setDraftSaveState("idle");
       return;
     }
     const current = resources.find((resource) => resource.id === selectedId);
-    setDrawerDraft(current ? { ...current, tagsInput: current.tags.join(", ") } : null);
+    setDrawerDraft(current ? toResourceDraft(current) : null);
   }, [selectedId, resources]);
 
   const filteredResources = resources
@@ -358,28 +316,7 @@ export default function ResourceWorkspace() {
     .filter((resource) => (filters.difficulty === "전체" ? true : resource.difficulty === filters.difficulty))
     .filter((resource) => (filters.roadmap === "전체" ? true : resource.roadmap === filters.roadmap))
     .filter((resource) => (filters.progress === "전체" ? true : resource.progress === filters.progress))
-    .filter((resource) => {
-      if (!deferredSearch) return true;
-      const haystack = [
-        resource.title,
-        resource.description,
-        resource.summary,
-        resource.notes,
-        resource.prepInfo,
-        resource.analysisNote,
-        resource.topic,
-        resource.recommendationReason,
-        resource.expectedOutcome,
-        resource.prerequisites,
-        resource.trustLevel,
-        resource.sourceCategory,
-        resource.tags.join(" "),
-        resource.url,
-      ]
-        .join(" ")
-        .toLowerCase();
-      return haystack.includes(deferredSearch.toLowerCase());
-    });
+    .filter((resource) => (!deferredSearch ? true : resource.searchIndex.includes(deferredSearch.toLowerCase())));
 
   const visibleResources = [...filteredResources].sort((a, b) => compareResources(a, b, sortConfig));
 
@@ -394,6 +331,45 @@ export default function ResourceWorkspace() {
     filters.roadmap !== "전체",
     filters.progress !== "전체",
   ].filter(Boolean).length;
+
+  const flushDraftSave = useEffectEvent((targetDraft: ResourceDraft) => {
+    saveDrawer(targetDraft);
+  });
+
+  useEffect(() => {
+    if (saveTimerRef.current) {
+      window.clearTimeout(saveTimerRef.current);
+      saveTimerRef.current = null;
+    }
+
+    if (!drawerDraft) {
+      setDraftSaveState("idle");
+      return;
+    }
+
+    const current = resources.find((resource) => resource.id === drawerDraft.id);
+    if (!current) {
+      setDraftSaveState("idle");
+      return;
+    }
+
+    if (resourceSignature(drawerDraft) === resourceSignature(current)) {
+      setDraftSaveState("saved");
+      return;
+    }
+
+    setDraftSaveState("saving");
+    saveTimerRef.current = window.setTimeout(() => {
+      flushDraftSave(drawerDraft);
+    }, SAVE_DEBOUNCE_MS);
+
+    return () => {
+      if (saveTimerRef.current) {
+        window.clearTimeout(saveTimerRef.current);
+        saveTimerRef.current = null;
+      }
+    };
+  }, [drawerDraft, resources, flushDraftSave]);
 
   useEffect(() => {
     if (styleMode !== "focus") return;
@@ -438,7 +414,7 @@ export default function ResourceWorkspace() {
 
       const id = crypto.randomUUID();
       const now = new Date().toISOString();
-      const resource = {
+      const safeResource = normalizeResource({
         id,
         title: analyzed.title,
         url: safeUrl,
@@ -461,21 +437,15 @@ export default function ResourceWorkspace() {
         order: "",
         notes: "",
         sourceType: selectedFile ? "file" : form.url.trim() ? "link" : "manual",
-        fileName: selectedFile?.name || "",
-        fileType: selectedFile?.type || "",
         createdAt: now,
         updatedAt: now,
-      };
-      const safeResource = normalizeResource(resource);
-
-      if (selectedFile) {
-        await putStoredFile(id, selectedFile);
-      }
+      });
 
       startTransition(() => {
         setResources((current) => [safeResource, ...current]);
         setForm(EMPTY_FORM);
         setSelectedFile(null);
+        setSelectedId(id);
       });
     } finally {
       setIsSubmitting(false);
@@ -583,11 +553,23 @@ export default function ResourceWorkspace() {
   }
 
   function openResource(id: string) {
+    if (drawerDraft && drawerDraft.id !== id) {
+      const current = resources.find((resource) => resource.id === drawerDraft.id);
+      if (current && resourceSignature(drawerDraft) !== resourceSignature(current)) {
+        saveDrawer(drawerDraft);
+      }
+    }
     setSelectedId(id);
   }
 
   function closeDrawer() {
     if (styleMode === "focus") return;
+    if (drawerDraft) {
+      const current = resources.find((resource) => resource.id === drawerDraft.id);
+      if (current && resourceSignature(drawerDraft) !== resourceSignature(current)) {
+        saveDrawer(drawerDraft);
+      }
+    }
     setSelectedId(null);
   }
 
@@ -601,63 +583,55 @@ export default function ResourceWorkspace() {
       return;
     }
 
-    const { tagsInput, ...draftWithoutTagsInput } = targetDraft;
-    const updated = normalizeResource({
-      ...draftWithoutTagsInput,
-      url: safeUrl,
-      tags: parseTags(tagsInput || ""),
-      updatedAt: new Date().toISOString(),
-    });
+    const existing = resources.find((resource) => resource.id === targetDraft.id);
+    const updated = toPersistedResource(
+      { ...targetDraft, url: safeUrl },
+      resourceSignature(targetDraft) === resourceSignature(existing || targetDraft) ? targetDraft.updatedAt : new Date().toISOString(),
+    );
 
-    setResources((current) => current.map((resource) => (resource.id === updated.id ? updated : resource)));
+    setResources((current) => {
+      let changed = false;
+      const nextResources = current.map((resource) => {
+        if (resource.id !== updated.id) return resource;
+        changed = resourceSignature(resource) !== resourceSignature(updated);
+        return changed ? updated : resource;
+      });
+      return changed ? nextResources : current;
+    });
+    setDrawerDraft((current) => (current && current.id === updated.id ? toResourceDraft(updated) : current));
+    setDraftSaveState("saved");
     setSelectedId(updated.id);
   }
 
-  async function deleteResource() {
+  function deleteResource() {
     if (!drawerDraft) return;
     const target = drawerDraft;
     if (!window.confirm(`"${target.title}" 리소스를 삭제하시겠습니까?`)) return;
 
-    if (target.sourceType === "file") {
-      await deleteStoredFile(target.id);
-    }
-
     setResources((current) => current.filter((resource) => resource.id !== target.id));
+    setDraftSaveState("idle");
     setSelectedId(null);
-  }
-
-  async function openLinkedFile() {
-    if (!drawerDraft || drawerDraft.sourceType !== "file") return;
-    const file = await getStoredFile(drawerDraft.id);
-    if (!file) {
-      window.alert("저장된 파일을 찾지 못했습니다.");
-      return;
-    }
-    const blobUrl = URL.createObjectURL(file);
-    if (canPreviewStoredFile(file)) {
-      window.open(blobUrl, "_blank", "noopener,noreferrer");
-      window.setTimeout(() => URL.revokeObjectURL(blobUrl), 60_000);
-      return;
-    }
-
-    const anchor = document.createElement("a");
-    anchor.href = blobUrl;
-    anchor.download = file.name || "download";
-    anchor.click();
-    window.setTimeout(() => URL.revokeObjectURL(blobUrl), 1_000);
-    window.alert("스크립트 실행 가능성이 있는 파일 형식은 새 탭 대신 다운로드로 처리했습니다.");
   }
 
   function loadSamples() {
     setResources((current) => {
       const existingIds = new Set(current.map((item) => item.id));
-      const toAdd = REFERENCE_RESOURCES.filter((item) => !existingIds.has(item.id));
+      const toAdd = DEFAULT_RESOURCES.filter((item) => !existingIds.has(item.id));
       return [...toAdd, ...current];
     });
   }
 
   function exportJson() {
-    const blob = new Blob([JSON.stringify({ resources }, null, 2)], { type: "application/json" });
+    const payload = buildExportPayload({
+      resources,
+      view,
+      filters,
+      styleMode,
+      sortConfig,
+      columnWidths,
+      columnVisibility,
+    });
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
     const url = window.URL.createObjectURL(blob);
     const anchor = document.createElement("a");
     anchor.href = url;
@@ -678,8 +652,22 @@ export default function ResourceWorkspace() {
 
     try {
       const parsed = JSON.parse(await file.text());
-      if (!isValidImportPayload(parsed)) throw new Error("invalid");
-      setResources(parsed.resources.map(normalizeResource));
+      const imported = normalizeImportedState(parsed, {
+        fallbackResources: DEFAULT_RESOURCES,
+        emptyFilters: EMPTY_FILTERS,
+        defaultSort: DEFAULT_SORT,
+        defaultColumnWidths: DEFAULT_COLUMN_WIDTHS,
+        defaultColumnVisibility: DEFAULT_COLUMN_VISIBILITY,
+      });
+      if (!imported) throw new Error("invalid");
+      setResources(imported.resources);
+      setView(imported.view);
+      setFilters(imported.filters);
+      setStyleMode(imported.styleMode);
+      setSortConfig(imported.sortConfig);
+      setColumnWidths(imported.columnWidths);
+      setColumnVisibility(imported.columnVisibility);
+      setSelectedId(null);
     } catch {
       window.alert("유효한 JSON 구조가 아닙니다.");
     } finally {
@@ -695,7 +683,7 @@ export default function ResourceWorkspace() {
           <p className="eyebrow">AI Learning Workspace</p>
           <h1>로드맵 설계부터 리소스 정리, 진도 관리, 노트 작성까지 한 화면에서.</h1>
           <p className="hero-copy">
-            링크와 파일을 추가하면 카테고리, 난이도, 로드맵, 학습 목표를 정리하고
+            링크와 직접 입력 리소스를 추가하면 카테고리, 난이도, 로드맵, 학습 목표를 정리하고
             표 보기와 노트 모아보기까지 바로 이어집니다.
           </p>
         </div>
@@ -722,7 +710,64 @@ export default function ResourceWorkspace() {
             JSON 불러오기
             <input type="file" accept="application/json" onChange={importJson} />
           </label>
+          <button className="ghost-button" type="button" onClick={() => setIsSettingsOpen((current) => !current)}>
+            {apiKeySet ? "AI 설정 (활성)" : "AI 설정"}
+          </button>
         </div>
+
+        {isSettingsOpen ? (
+          <div className="glass-panel settings-panel">
+            <div className="section-head">
+              <p className="eyebrow">AI Settings</p>
+              <h2>Claude API 키 설정</h2>
+            </div>
+            <p className="settings-description">
+              Anthropic API 키를 등록하면 리소스 추가 시 AI가 제목, 카테고리, 난이도, 로드맵 등을 자동 분석합니다.
+              키는 브라우저에만 저장되며 서버에 보관되지 않습니다. 키가 없으면 기존 키워드 기반 분석으로 동작합니다.
+            </p>
+            <div className="settings-row">
+              <input
+                type="password"
+                value={apiKeyInput}
+                onChange={(event) => setApiKeyInput(event.target.value)}
+                placeholder={apiKeySet ? "••••••••  (등록됨)" : "sk-ant-..."}
+                className="settings-input"
+              />
+              <button
+                className="primary-button"
+                type="button"
+                onClick={() => {
+                  if (apiKeyInput.trim()) {
+                    setStoredApiKey(apiKeyInput.trim());
+                    setApiKeySet(true);
+                    setApiKeyInput("");
+                    setIsSettingsOpen(false);
+                  }
+                }}
+              >
+                저장
+              </button>
+              {apiKeySet ? (
+                <button
+                  className="ghost-button"
+                  type="button"
+                  onClick={() => {
+                    setStoredApiKey("");
+                    setApiKeySet(false);
+                    setApiKeyInput("");
+                  }}
+                >
+                  삭제
+                </button>
+              ) : null}
+            </div>
+            {apiKeySet ? (
+              <p className="settings-status">API 키가 등록되어 있습니다. AI 분석이 활성화됩니다.</p>
+            ) : (
+              <p className="settings-status">API 키가 없습니다. 키워드 기반 분석으로 동작합니다.</p>
+            )}
+          </div>
+        ) : null}
       </section>
 
       <section className="stats-bar">
@@ -774,15 +819,6 @@ export default function ResourceWorkspace() {
                 />
               </label>
 
-              <label className="upload-box">
-                <span>파일 첨부</span>
-                <input
-                  type="file"
-                  onChange={(event) => setSelectedFile(event.target.files?.[0] || null)}
-                />
-                <strong>{selectedFile ? selectedFile.name : "파일 선택"}</strong>
-              </label>
-
               <div className="triple-grid control-wide">
                 <SelectField
                   label="카테고리"
@@ -813,10 +849,22 @@ export default function ResourceWorkspace() {
                 />
               </label>
 
+              <label className="upload-box control-wide">
+                <span>파일 첨부 (선택)</span>
+                <input
+                  type="file"
+                  onChange={(event) => setSelectedFile(event.target.files?.[0] || null)}
+                />
+                {selectedFile ? (
+                  <span className="upload-file-name">{selectedFile.name}</span>
+                ) : null}
+              </label>
+
               <div className="control-actions">
                 <button className="primary-button" type="submit" disabled={isSubmitting}>
-                  {isSubmitting ? "분석 중..." : "리소스 추가"}
+                  {isSubmitting ? (apiKeySet ? "AI 분석 중..." : "분석 중...") : "리소스 추가"}
                 </button>
+                {apiKeySet ? <span className="ai-badge">AI 분석 활성</span> : null}
               </div>
             </form>
           ) : (
@@ -971,7 +1019,7 @@ export default function ResourceWorkspace() {
               {view !== "table" ? (
                 <div className="compact-workspace-meta">
                   <span>현재 결과 {visibleResources.length}개</span>
-                  <span>파일 자료 {resources.filter((resource) => resource.sourceType === "file").length}개</span>
+                  <span>링크 자료 {resources.filter((resource) => resource.sourceType === "link").length}개</span>
                   <span>로드맵 단계 {new Set(visibleResources.map((resource) => resource.roadmap)).size}개</span>
                   <span>노트 {notesOnly.length}개</span>
                 </div>
@@ -983,7 +1031,7 @@ export default function ResourceWorkspace() {
               {hydrated && visibleResources.length === 0 ? (
                 <EmptyState
                   title="아직 리소스가 없습니다."
-                  text="왼쪽에서 링크나 파일을 추가하면 자동 분류와 상세 정리가 시작됩니다."
+                  text="왼쪽에서 링크나 직접 입력 리소스를 추가하면 자동 분류와 상세 정리가 시작됩니다."
                 />
               ) : null}
               {hydrated && visibleResources.length > 0
@@ -1067,8 +1115,8 @@ export default function ResourceWorkspace() {
                   setDraft={setDrawerDraft}
                   onDelete={deleteResource}
                   onSave={saveDrawer}
-                  onOpenFile={openLinkedFile}
                   inline
+                  saveStatus={draftSaveState}
                 />
               ) : (
                 <EmptyState
@@ -1089,8 +1137,8 @@ export default function ResourceWorkspace() {
               setDraft={setDrawerDraft}
               onDelete={deleteResource}
               onSave={saveDrawer}
-              onOpenFile={openLinkedFile}
               onClose={closeDrawer}
+              saveStatus={draftSaveState}
             />
           </aside>
         </div>
@@ -1422,7 +1470,7 @@ function renderRoadmapJourney(resources, openResource) {
                         <p className="roadmap-resource-summary">{resource.summary || resource.description || "요약 없음"}</p>
                         <div className="roadmap-resource-meta">
                           <span>{resource.difficulty}</span>
-                          <span>{resource.sourceType === "file" ? "파일 자료" : "링크 자료"}</span>
+                          <span>{resource.sourceType === "link" ? "링크 자료" : "직접 추가"}</span>
                         </div>
                         <div className="roadmap-resource-focus">
                           {resource.learningGoals[0] || resource.prepInfo || "학습 목표를 추가하면 이 영역에 먼저 보입니다."}
@@ -1548,7 +1596,7 @@ function renderCategoryAtlas(resources, openResource) {
                     <p className="category-resource-summary">{resource.summary || resource.description || "요약 없음"}</p>
                     <div className="category-resource-meta">
                       <span>{resource.progress}</span>
-                      <span>{resource.sourceType === "file" ? "파일" : "링크"}</span>
+                      <span>{getResourceKindLabel(resource.sourceType)}</span>
                     </div>
                   </article>
                 ))}
@@ -1685,397 +1733,6 @@ function renderDifficultyLadder(resources, openResource) {
   );
 }
 
-function ResourceInspector({ draft, setDraft, onDelete, onSave, onOpenFile, onClose, inline = false }: ResourceInspectorProps) {
-  const [isEditing, setIsEditing] = useState(false);
-  const progressOptions = [
-    { label: "학습 시작", value: "미시작" },
-    { label: "학습중", value: "진행 중" },
-    { label: "완료", value: "완료" },
-  ];
-
-  useEffect(() => {
-    setIsEditing(false);
-  }, [draft.id, inline]);
-
-  const detailBadges = [
-    draft.category,
-    draft.roadmap,
-    draft.difficulty,
-    draft.trustLevel || "직접 추가",
-  ].filter(Boolean);
-  const whyItMattersValue = draft.recommendationReason || draft.description;
-  const prerequisitesValue = draft.prerequisites || draft.prepInfo;
-  const outcomesValue = draft.expectedOutcome || draft.learningGoals.join("\n");
-  const safeDraftUrl = sanitizeExternalUrl(draft.url);
-
-  function handleSave() {
-    onSave();
-    setIsEditing(false);
-  }
-
-  function handleNotesChange(value) {
-    setDraft((current) => (current ? { ...current, notes: value } : current));
-  }
-
-  function handleNotesBlur() {
-    if (isEditing) return;
-    onSave({ ...draft });
-  }
-
-  function handleProgressChange(nextProgress) {
-    if (draft.progress === nextProgress) return;
-    const nextDraft = { ...draft, progress: nextProgress };
-    setDraft(nextDraft);
-    onSave(nextDraft);
-  }
-
-  return (
-    <>
-      <div className={`drawer-head ${inline ? "inline-head" : ""}`}>
-        <div className="resource-detail-hero">
-          <p className="eyebrow">{inline ? "Selected resource" : "Resource detail"}</p>
-          <h2>{draft.title}</h2>
-          <div className="resource-detail-badges">
-            {detailBadges.map((badge) => (
-              <span key={badge}>{badge}</span>
-            ))}
-          </div>
-        </div>
-        <div className="resource-detail-head-actions">
-          <button className={`ghost-button compact-button ${isEditing ? "active" : ""}`} type="button" onClick={() => setIsEditing((current) => !current)}>
-            {isEditing ? "보기" : "편집"}
-          </button>
-          {!inline ? (
-            <button className="icon-button" type="button" onClick={onClose}>
-              ×
-            </button>
-          ) : null}
-        </div>
-      </div>
-
-      <div className={`drawer-scroll ${inline ? "inline-scroll" : ""}`}>
-        <div className={`resource-detail-layout ${isEditing ? "editing" : "reading"}`}>
-          <section className="resource-detail-summary-card">
-            <div className="resource-detail-section-head">
-              <div>
-                <p className="eyebrow">Properties</p>
-                <h3>리소스 속성</h3>
-              </div>
-              <div className="resource-detail-link-row">
-                {safeDraftUrl ? (
-                  <a className="ghost-button compact-button" href={safeDraftUrl} target="_blank" rel="noopener noreferrer">
-                    링크 열기
-                  </a>
-                ) : null}
-                {draft.sourceType === "file" ? (
-                  <button className="ghost-button compact-button" type="button" onClick={onOpenFile}>
-                    파일 열기
-                  </button>
-                ) : null}
-              </div>
-            </div>
-
-            <div className="property-sheet">
-              <div className="property-grid">
-              <PropertyRow label="학습 진도" full>
-                <div className="progress-strip-controls">
-                  {progressOptions.map((option) => (
-                    <button
-                      key={option.value}
-                      type="button"
-                      className={`progress-chip ${draft.progress === option.value ? "active" : ""}`}
-                      onClick={() => handleProgressChange(option.value)}
-                    >
-                      {option.label}
-                    </button>
-                  ))}
-                  {draft.progress === "복습 필요" ? <span className="progress-chip review">복습 필요</span> : null}
-                </div>
-              </PropertyRow>
-              <PropertyRow label="카테고리">
-                {isEditing ? (
-                  <select
-                    className="property-control"
-                    value={draft.category}
-                    onChange={(event) =>
-                      setDraft((current) =>
-                        current ? { ...current, category: event.target.value as ResourceRecord["category"] } : current,
-                      )
-                    }
-                  >
-                    {CATEGORY_OPTIONS.map((option) => (
-                      <option key={option} value={option}>
-                        {option}
-                      </option>
-                    ))}
-                  </select>
-                ) : (
-                  <span>{draft.category || "-"}</span>
-                )}
-              </PropertyRow>
-              <PropertyRow label="난이도">
-                {isEditing ? (
-                  <select
-                    className="property-control"
-                    value={draft.difficulty}
-                    onChange={(event) =>
-                      setDraft((current) =>
-                        current ? { ...current, difficulty: event.target.value as ResourceRecord["difficulty"] } : current,
-                      )
-                    }
-                  >
-                    {DIFFICULTY_OPTIONS.map((option) => (
-                      <option key={option} value={option}>
-                        {option}
-                      </option>
-                    ))}
-                  </select>
-                ) : (
-                  <span>{draft.difficulty || "-"}</span>
-                )}
-              </PropertyRow>
-              <PropertyRow label="로드맵">
-                {isEditing ? (
-                  <select
-                    className="property-control"
-                    value={draft.roadmap}
-                    onChange={(event) =>
-                      setDraft((current) =>
-                        current ? { ...current, roadmap: event.target.value as ResourceRecord["roadmap"] } : current,
-                      )
-                    }
-                  >
-                    {ROADMAP_OPTIONS.map((option) => (
-                      <option key={option} value={option}>
-                        {option}
-                      </option>
-                    ))}
-                  </select>
-                ) : (
-                  <span>{draft.roadmap || "-"}</span>
-                )}
-              </PropertyRow>
-              <PropertyRow label="학습 진도">
-                {isEditing ? (
-                  <select
-                    className="property-control"
-                    value={draft.progress}
-                    onChange={(event) =>
-                      setDraft((current) =>
-                        current ? { ...current, progress: event.target.value as ResourceRecord["progress"] } : current,
-                      )
-                    }
-                  >
-                    {PROGRESS_OPTIONS.map((option) => (
-                      <option key={option} value={option}>
-                        {option}
-                      </option>
-                    ))}
-                  </select>
-                ) : (
-                  <span>{draft.progress || "-"}</span>
-                )}
-              </PropertyRow>
-              <PropertyRow label="태그">
-                {isEditing ? (
-                  <input
-                    className="property-control"
-                    value={draft.tagsInput}
-                    onChange={(event) => setDraft((current) => (current ? { ...current, tagsInput: event.target.value } : current))}
-                    placeholder="쉼표로 구분"
-                  />
-                ) : draft.tags.length ? (
-                  <div className="tag-chip-list">
-                    {draft.tags.map((tag) => (
-                      <span key={tag} className="tag-chip">
-                        #{tag}
-                      </span>
-                    ))}
-                  </div>
-                ) : (
-                  <span>-</span>
-                )}
-              </PropertyRow>
-              </div>
-            </div>
-            <div className="resource-detail-flow">
-              <ReadableField
-                label="한 줄 요약"
-                value={draft.summary || draft.description}
-                multiline
-                editing={isEditing}
-                rows={4}
-                onChange={(value) => setDraft((current) => (current ? { ...current, summary: value } : current))}
-              />
-              <ReadableField
-                label="왜 볼 만한가"
-                value={whyItMattersValue}
-                multiline
-                editing={isEditing}
-                rows={4}
-                onChange={(value) => setDraft((current) => (current ? { ...current, recommendationReason: value } : current))}
-              />
-              <ReadableField
-                label="선행 지식"
-                value={prerequisitesValue}
-                multiline
-                editing={isEditing}
-                rows={3}
-                onChange={(value) => setDraft((current) => (current ? { ...current, prerequisites: value, prepInfo: value } : current))}
-              />
-              <ReadableField
-                label="얻게 되는 것"
-                value={outcomesValue}
-                multiline
-                editing={isEditing}
-                rows={4}
-                onChange={(value) =>
-                  setDraft((current) =>
-                    current
-                      ? {
-                          ...current,
-                          expectedOutcome: value,
-                          learningGoals: value.split("\n").map((item) => item.trim()).filter(Boolean),
-                        }
-                      : current,
-                  )
-                }
-              />
-              <ReadableField
-                label="주제"
-                value={draft.topic}
-                multiline
-                editing={isEditing}
-                rows={3}
-                onChange={(value) => setDraft((current) => (current ? { ...current, topic: value } : current))}
-              />
-            </div>
-          </section>
-
-          <section className="resource-detail-section">
-            <div className="resource-detail-section-head">
-              <div>
-                <h3>메모와 판단</h3>
-              </div>
-            </div>
-            <div className="resource-detail-flow">
-              <article className="readable-field editing large plain-note-field">
-                <textarea
-                  className="readable-editor large note-editor"
-                  rows={8}
-                  value={draft.notes || ""}
-                  onChange={(event) => handleNotesChange(event.target.value)}
-                  onBlur={handleNotesBlur}
-                  placeholder="여기에 학습 메모, 다음 액션, 요약 정리를 적습니다."
-                />
-                <div className="note-save-row">
-                  <button className="ghost-button compact-button note-save-button" type="button" onClick={handleNotesBlur}>
-                    저장
-                  </button>
-                </div>
-              </article>
-              <ReadableField
-                label="분석 메모"
-                value={draft.analysisNote}
-                multiline
-                editing={isEditing}
-                rows={4}
-                onChange={(value) => setDraft((current) => (current ? { ...current, analysisNote: value } : current))}
-              />
-            </div>
-          </section>
-
-          <section className="resource-detail-section">
-            <div className="resource-detail-section-head">
-              <div>
-                <h3>메타 정보</h3>
-              </div>
-            </div>
-            <div className="property-sheet readable-meta-panel">
-              <div className="property-grid meta-property-grid">
-                <PropertyRow label="소스">
-                  <span>{draft.sourceType || "-"}</span>
-                </PropertyRow>
-                <PropertyRow label="신뢰도">
-                  <span>{draft.trustLevel || "-"}</span>
-                </PropertyRow>
-                {draft.fileName ? (
-                  <PropertyRow label="파일명" full>
-                    <span>{draft.fileName}</span>
-                  </PropertyRow>
-                ) : null}
-                <PropertyRow label="생성">
-                  <span>{formatDate(draft.createdAt)}</span>
-                </PropertyRow>
-                <PropertyRow label="수정">
-                  <span>{formatDate(draft.updatedAt)}</span>
-                </PropertyRow>
-              </div>
-            </div>
-          </section>
-        </div>
-      </div>
-
-      <div className={`drawer-actions ${inline ? "inline-actions" : ""}`}>
-        <button className="ghost-button danger" type="button" onClick={onDelete}>
-          삭제
-        </button>
-        {isEditing ? (
-          <button className="primary-button" type="button" onClick={handleSave}>
-            저장
-          </button>
-        ) : null}
-      </div>
-    </>
-  );
-}
-
-function ReadableField({
-  label,
-  value,
-  multiline = false,
-  large = false,
-  editing = false,
-  onChange,
-  rows = 4,
-  placeholder = "",
-}) {
-  return (
-    <article className={`readable-field ${large ? "large" : ""} ${editing ? "editing" : ""}`}>
-      <p>{label}</p>
-      {editing ? multiline ? (
-        <textarea
-          className={`readable-editor ${large ? "large" : ""}`}
-          rows={rows}
-          value={value || ""}
-          onChange={(event) => onChange?.(event.target.value)}
-          placeholder={placeholder}
-        />
-      ) : (
-        <input
-          className="readable-editor"
-          value={value || ""}
-          onChange={(event) => onChange?.(event.target.value)}
-          placeholder={placeholder}
-        />
-      ) : multiline ? (
-        <div className="readable-field-body multiline">{value?.trim() || "아직 내용이 없습니다."}</div>
-      ) : (
-        <strong>{value?.trim() || "-"}</strong>
-      )}
-    </article>
-  );
-}
-
-function PropertyRow({ label, children, full = false }) {
-  return (
-    <div className={`property-row ${full || label === "태그" ? "full" : ""}`}>
-      <div className="property-label">{label}</div>
-      <div className="property-value">{children}</div>
-    </div>
-  );
-}
-
 function FilterChips({ label, value, options, onChange }) {
   return (
     <div className="chip-filter">
@@ -2202,13 +1859,7 @@ function renderTableBodyCell(column, resource) {
         </div>
         <div className="table-meta-line">
           <span>{resource.notes ? "노트 있음" : "노트 없음"}</span>
-          <span>
-            {resource.sourceType === "file"
-              ? "파일"
-              : resource.sourceType === "link"
-                ? "링크"
-                : "직접 추가"}
-          </span>
+          <span>{getResourceKindLabel(resource.sourceType)}</span>
         </div>
       </td>
     );
@@ -2306,179 +1957,11 @@ function EmptyState({ title, text }) {
   );
 }
 
-function parseTags(raw: string): string[] {
-  return sanitizeStringArray(raw.split(","), FIELD_LIMITS.tag, FIELD_LIMITS.tagCount);
-}
-
-function getDominantValue(items: ResourceRecord[], key: keyof ResourceRecord): string {
-  if (!items.length) return "";
-
-  const counts = new Map<string, number>();
-  for (const item of items) {
-    const value = item[key];
-    if (!value) continue;
-    const normalizedValue = String(value);
-    counts.set(normalizedValue, (counts.get(normalizedValue) || 0) + 1);
-  }
-
-  let dominant = "";
-  let max = 0;
-  for (const [value, count] of counts.entries()) {
-    if (count > max) {
-      dominant = value;
-      max = count;
-    }
-  }
-
-  return dominant;
-}
-
-function normalizeResource(resource): ResourceRecord {
-  const source = isPlainObject(resource) ? resource : {};
-  const now = new Date().toISOString();
-  const title = sanitizeString(source.title, FIELD_LIMITS.title);
-
-  return {
-    id: sanitizeId(source.id),
-    title: title || "이름 없는 리소스",
-    url: sanitizeExternalUrl(source.url).slice(0, FIELD_LIMITS.url),
-    description: sanitizeString(source.description, FIELD_LIMITS.longText),
-    category: sanitizeEnum(source.category, SAFE_CATEGORY_VALUES, "Foundations"),
-    difficulty: sanitizeEnum(source.difficulty, SAFE_DIFFICULTY_VALUES, "Beginner"),
-    roadmap: sanitizeEnum(source.roadmap, SAFE_ROADMAP_VALUES, "Foundation"),
-    progress: sanitizeEnum(source.progress, SAFE_PROGRESS_VALUES, "미시작"),
-    tags: sanitizeStringArray(source.tags, FIELD_LIMITS.tag, FIELD_LIMITS.tagCount),
-    summary: sanitizeString(source.summary, FIELD_LIMITS.longText),
-    learningGoals: sanitizeStringArray(source.learningGoals, FIELD_LIMITS.learningGoal, FIELD_LIMITS.learningGoalCount),
-    prepInfo: sanitizeString(source.prepInfo, FIELD_LIMITS.mediumText),
-    analysisNote: sanitizeString(source.analysisNote, FIELD_LIMITS.longText),
-    notes: sanitizeString(source.notes, FIELD_LIMITS.notes),
-    sourceType: sanitizeEnum(source.sourceType, SAFE_SOURCE_TYPES, "manual"),
-    fileName: sanitizeString(source.fileName, FIELD_LIMITS.fileName),
-    fileType: sanitizeString(source.fileType, FIELD_LIMITS.fileType),
-    topic: sanitizeString(source.topic, FIELD_LIMITS.longText),
-    trustLevel: sanitizeString(source.trustLevel, FIELD_LIMITS.shortText),
-    recommendationReason: sanitizeString(source.recommendationReason, FIELD_LIMITS.longText),
-    expectedOutcome: sanitizeString(source.expectedOutcome, FIELD_LIMITS.longText),
-    prerequisites: sanitizeString(source.prerequisites, FIELD_LIMITS.mediumText),
-    sourceCategory: sanitizeString(source.sourceCategory, FIELD_LIMITS.shortText),
-    order: sanitizeString(source.order, FIELD_LIMITS.order),
-    createdAt: sanitizeDate(source.createdAt, now),
-    updatedAt: sanitizeDate(source.updatedAt, now),
-  };
-}
-
-function formatDate(value: string): string {
-  if (!value) return "-";
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? "-" : date.toLocaleString("ko-KR");
-}
-
 function slugify(value: string): string {
   return String(value)
     .toLowerCase()
     .replace(/\s+/g, "-")
     .replace(/[^a-z0-9-]/g, "");
-}
-
-function sanitizeExternalUrl(value: string): string {
-  const raw = String(value || "").trim();
-  if (!raw) return "";
-
-  try {
-    const parsed = new URL(raw);
-    return SAFE_LINK_PROTOCOLS.has(parsed.protocol) ? parsed.toString() : "";
-  } catch {
-    return "";
-  }
-}
-
-function canPreviewStoredFile(file: File): boolean {
-  const fileType = String(file?.type || "").toLowerCase();
-  const extension = getExtension(file?.name || "");
-  return SAFE_PREVIEW_FILE_TYPES.has(fileType) || SAFE_PREVIEW_FILE_EXTENSIONS.has(extension);
-}
-
-function sanitizeString(value, maxLength: number): string {
-  return String(value ?? "")
-    .replace(/\u0000/g, "")
-    .trim()
-    .slice(0, maxLength);
-}
-
-function sanitizeStringArray(value, itemMaxLength: number, maxItems: number): string[] {
-  if (!Array.isArray(value)) return [];
-
-  const normalized: string[] = [];
-  for (const item of value) {
-    const safeItem = sanitizeString(item, itemMaxLength);
-    if (!safeItem || normalized.includes(safeItem)) continue;
-    normalized.push(safeItem);
-    if (normalized.length >= maxItems) break;
-  }
-  return normalized;
-}
-
-function sanitizeEnum<T extends string>(value, allowedValues: Set<T>, fallback: T): T {
-  return allowedValues.has(value) ? value : fallback;
-}
-
-function sanitizeDate(value, fallback: string): string {
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? fallback : date.toISOString();
-}
-
-function sanitizeId(value): string {
-  const safeId = sanitizeString(value, FIELD_LIMITS.id);
-  return safeId || crypto.randomUUID();
-}
-
-function isPlainObject(value): value is Record<string, any> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function isValidImportPayload(payload): payload is { resources: ResourceRecord[] } {
-  if (!isPlainObject(payload) || !Array.isArray(payload.resources)) return false;
-  if (payload.resources.length > MAX_IMPORTED_RESOURCES) return false;
-  return payload.resources.every(isPlainObject);
-}
-
-function compareResources(left: ResourceRecord, right: ResourceRecord, sortConfig: SortConfig): number {
-  if (!sortConfig.key) {
-    return new Date(right.updatedAt).getTime() - new Date(left.updatedAt).getTime();
-  }
-
-  const leftValue = getSortValue(left, sortConfig.key);
-  const rightValue = getSortValue(right, sortConfig.key);
-  const direction = sortConfig.direction === "asc" ? 1 : -1;
-
-  if (typeof leftValue === "number" && typeof rightValue === "number") {
-    return (leftValue - rightValue) * direction;
-  }
-
-  return String(leftValue).localeCompare(String(rightValue), "ko", { numeric: true, sensitivity: "base" }) * direction;
-}
-
-function getSortValue(resource: ResourceRecord, sortKey: string) {
-  const difficultyOrder = { Beginner: 1, Intermediate: 2, Advanced: 3 };
-  const roadmapOrder = {
-    Foundation: 1,
-    Prompting: 2,
-    Application: 3,
-    "Agent Systems": 4,
-    Evaluation: 5,
-    Production: 6,
-  };
-  const progressOrder = { 미시작: 1, "진행 중": 2, "복습 필요": 3, 완료: 4 };
-
-  if (sortKey === "resource") return resource.title || "";
-  if (sortKey === "category") return resource.category || "";
-  if (sortKey === "difficulty") return difficultyOrder[resource.difficulty] || 999;
-  if (sortKey === "roadmap") return roadmapOrder[resource.roadmap] || 999;
-  if (sortKey === "status") return progressOrder[resource.progress] || 999;
-  if (sortKey === "link") return resource.url || resource.fileName || "";
-
-  return resource.updatedAt || "";
 }
 
 function progressBadgeClass(value: string): string {
@@ -2499,23 +1982,4 @@ function difficultyBadgeClass(value: string): string {
   if (value === "Advanced") return "danger";
   if (value === "Intermediate") return "warning";
   return "subtle";
-}
-
-function prettyUrl(value: string): { hostname: string; path: string } {
-  try {
-    const url = new URL(value);
-    return {
-      hostname: url.hostname.replace(/^www\./, ""),
-      path: url.pathname === "/" ? value : `${url.pathname}${url.search}`.slice(0, 56),
-    };
-  } catch {
-    return {
-      hostname: value,
-      path: "",
-    };
-  }
-}
-
-function getExtension(fileName: string): string {
-  return fileName.includes(".") ? fileName.split(".").pop()?.toLowerCase() || "" : "";
 }

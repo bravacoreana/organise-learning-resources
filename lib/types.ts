@@ -74,8 +74,6 @@ export interface ResourceRecord {
   analysisNote: string;
   notes: string;
   sourceType: SourceType;
-  fileName: string;
-  fileType: string;
   topic: string;
   trustLevel: string;
   recommendationReason: string;
@@ -85,6 +83,7 @@ export interface ResourceRecord {
   order: string | number;
   createdAt: string;
   updatedAt: string;
+  searchIndex: string;
 }
 
 export interface ResourceDraft extends ResourceRecord {

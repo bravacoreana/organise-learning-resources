@@ -6,6 +6,7 @@ import type {
   ResourceCategory,
   RoadmapStage,
 } from "@/lib/types";
+import { analyzeWithAI } from "@/lib/ai-analysis";
 
 const CATEGORY_KEYWORDS = [
   { category: "Agents", keywords: ["agent", "agents", "langgraph", "autogen", "crew", "workflow", "tool use", "state graph"] },
@@ -63,9 +64,23 @@ export async function analyzeResourceInput({
   roadmap,
   tags,
 }: FileAnalysisInput): Promise<FileAnalysisResult> {
-  const fileContext = file ? await readFileContext(file) : { title: "", description: "", context: "", tags: [] };
+  const fileContext = file ? await readFileContext(file) : { title: "", description: "", context: "", tags: [] as string[] };
   const mergedTitle = title || fileContext.title || getTitleFromUrl(url) || "새 리소스";
   const mergedDescription = description || fileContext.description || "";
+
+  try {
+    const aiResult = await analyzeWithAI({
+      title: mergedTitle,
+      url,
+      description: mergedDescription,
+      fileContent: fileContext.context || undefined,
+      fileName: file?.name,
+    });
+    if (aiResult) return aiResult;
+  } catch {
+    // AI failed, fall back to keyword analysis
+  }
+
   const text = [mergedTitle, url, mergedDescription, fileContext.context, tags.join(" "), file?.name || ""].join(" ").toLowerCase();
 
   const resolvedCategory = category === "자동 추정" ? inferCategory(text) : category;
@@ -88,34 +103,6 @@ export async function analyzeResourceInput({
     learningGoals,
     prepInfo,
     analysisNote,
-  };
-}
-
-async function readFileContext(file: File) {
-  const extension = getExtension(file.name);
-  const textLike = file.type.startsWith("text/") || ["md", "txt", "json", "html", "htm", "csv", "js", "ts", "py"].includes(extension);
-
-  if (!textLike || file.size > 2_000_000) {
-    return {
-      title: stripExtension(file.name),
-      description: `${file.name} 파일 기반으로 분석했습니다.`,
-      context: `${file.name} ${extension}`,
-      tags: [extension].filter(Boolean),
-    };
-  }
-
-  const raw = (await file.text()).slice(0, 5000);
-  const clean = raw.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
-  const titleMatch =
-    raw.match(/<title>(.*?)<\/title>/i) ||
-    raw.match(/^#\s+(.+)$/m) ||
-    raw.match(/^(.{8,100})$/m);
-
-  return {
-    title: titleMatch ? titleMatch[1].trim() : stripExtension(file.name),
-    description: clean.slice(0, 220),
-    context: `${file.name} ${clean}`,
-    tags: [extension].filter(Boolean),
   };
 }
 
@@ -265,8 +252,43 @@ function getTitleFromUrl(url: string): string {
   }
 }
 
+interface FileContext {
+  title: string;
+  description: string;
+  context: string;
+  tags: string[];
+}
+
+async function readFileContext(file: File): Promise<FileContext> {
+  const extension = getExtension(file.name);
+  const textLike = file.type.startsWith("text/") || ["md", "txt", "json", "html", "htm", "csv", "js", "ts", "py"].includes(extension);
+
+  if (!textLike || file.size > 2_000_000) {
+    return {
+      title: stripExtension(file.name),
+      description: `${file.name} 파일 기반으로 분석했습니다.`,
+      context: `${file.name} ${extension}`,
+      tags: [extension].filter(Boolean),
+    };
+  }
+
+  const raw = (await file.text()).slice(0, 5000);
+  const clean = raw.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
+  const titleMatch =
+    raw.match(/<title>(.*?)<\/title>/i) ||
+    raw.match(/^#\s+(.+)$/m) ||
+    raw.match(/^(.{8,100})$/m);
+
+  return {
+    title: titleMatch ? titleMatch[1].trim() : stripExtension(file.name),
+    description: clean.slice(0, 220),
+    context: `${file.name} ${clean}`,
+    tags: [extension].filter(Boolean),
+  };
+}
+
 function getExtension(fileName: string): string {
-  return fileName.includes(".") ? fileName.split(".").pop().toLowerCase() : "";
+  return fileName.includes(".") ? fileName.split(".").pop()!.toLowerCase() : "";
 }
 
 function stripExtension(fileName: string): string {
