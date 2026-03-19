@@ -2525,6 +2525,14 @@ tbody tr:hover {
   word-break: break-all;
 }
 
+/* Toolbar reset button */
+.toolbar-reset {
+  margin-top: 6px;
+  font-size: 11px;
+  min-height: 26px;
+  padding: 0 10px;
+}
+
 /* AI badge */
 .ai-badge {
   font-size: 11px;

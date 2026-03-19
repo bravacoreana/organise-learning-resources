@@ -82,9 +82,9 @@ const DEFAULT_SORT: SortConfig = {
 const DEFAULT_COLUMN_WIDTHS: ColumnWidths = {
   category: 170,
   resource: 460,
-  roadmap: 180,
-  difficulty: 150,
-  status: 180,
+  roadmap: 140,
+  difficulty: 120,
+  status: 150,
   link: 120,
 };
 
@@ -100,9 +100,9 @@ const DEFAULT_COLUMN_VISIBILITY: ColumnVisibility = {
 const TABLE_COLUMNS: TableColumn[] = [
   { key: "category", label: "카테고리", sortKey: "category", minWidth: 150 },
   { key: "resource", label: "리소스 이름", sortKey: "resource", minWidth: 320 },
-  { key: "roadmap", label: "로드맵", sortKey: "roadmap", minWidth: 150 },
-  { key: "difficulty", label: "난이도", sortKey: "difficulty", minWidth: 130 },
-  { key: "status", label: "상태", sortKey: "status", minWidth: 150 },
+  { key: "roadmap", label: "로드맵", sortKey: "roadmap", minWidth: 120 },
+  { key: "difficulty", label: "난이도", sortKey: "difficulty", minWidth: 100 },
+  { key: "status", label: "상태", sortKey: "status", minWidth: 120 },
   { key: "link", label: "링크", sortKey: "link", minWidth: 110 },
 ];
 
@@ -1813,9 +1813,6 @@ function renderTableFilterCell(column, filters, updateFilter, resetFilters, resu
 
   const actions = (
     <div className="table-filter-actions">
-      <button className="table-reset-button" type="button" onClick={resetFilters}>
-        초기화
-      </button>
       <span>{resultCount}개</span>
     </div>
   );
@@ -1857,10 +1854,13 @@ function renderTableBodyCell(column, resource) {
         <div className="table-secondary">
           {resource.summary || resource.description || "요약 없음"}
         </div>
-        <div className="table-meta-line">
-          <span>{resource.notes ? "노트 있음" : "노트 없음"}</span>
-          <span>{getResourceKindLabel(resource.sourceType)}</span>
-        </div>
+        {resource.tags.length > 0 ? (
+          <div className="table-meta-line">
+            {resource.tags.slice(0, 4).map((tag) => (
+              <span key={tag}>#{tag}</span>
+            ))}
+          </div>
+        ) : null}
       </td>
     );
   }
@@ -1886,10 +1886,7 @@ function renderTableBodyCell(column, resource) {
   if (column.key === "status") {
     return (
       <td key={column.key}>
-        <div className="table-stack">
-          <span className={`db-badge ${progressBadgeClass(resource.progress)}`}>{resource.progress}</span>
-          <span className={`db-badge ${trustBadgeClass(resource.trustLevel)}`}>{resource.trustLevel || "직접 추가"}</span>
-        </div>
+        <span className={`db-badge ${progressBadgeClass(resource.progress)}`}>{resource.progress}</span>
       </td>
     );
   }
