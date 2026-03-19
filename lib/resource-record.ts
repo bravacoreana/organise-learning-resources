@@ -10,7 +10,7 @@ import type {
 } from "@/lib/types";
 
 const SAFE_LINK_PROTOCOLS = new Set(["http:", "https:"]);
-const SAFE_SOURCE_TYPES = new Set<SourceType>(["manual", "link"]);
+const SAFE_SOURCE_TYPES = new Set<SourceType>(["manual", "link", "file"]);
 const SAFE_CATEGORY_VALUES = new Set<ResourceCategory>(CATEGORY_OPTIONS);
 const SAFE_DIFFICULTY_VALUES = new Set<DifficultyLevel>(DIFFICULTY_OPTIONS);
 const SAFE_ROADMAP_VALUES = new Set<RoadmapStage>(ROADMAP_OPTIONS);
